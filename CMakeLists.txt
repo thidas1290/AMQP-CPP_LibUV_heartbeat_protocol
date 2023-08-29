@@ -11,5 +11,8 @@ link_directories(/opt/homebrew/lib)
 
 add_executable(main main.cpp
                     handler.h
+                    watcher.h
+                    watchable.h
+                    connectionwrapper.h
                     )
 target_link_libraries(main uv amqpcpp pthread dl ssl)
