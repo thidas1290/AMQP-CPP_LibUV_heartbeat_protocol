@@ -1,51 +1,87 @@
 #pragma once
 
-#include <amqpcpp/libuv.h>
+#include "amqpcpp/linux_tcp.h"
 #include <uv.h>
 #include "iostream"
+#include <list>
+#include "watcher.h"
+#include "connectionwrapper.h"
 
 namespace AMQP{
     
-    class LibUVHandler : public LibUvHandler
+    class LibUVHandler : public TcpHandler
     {
         private:
-            uv_loop_t* loop;
-            uv_timer_t* timer;
+        /**
+             *  The event loop
+             *  @var uv_loop_t*
+             */
+            uv_loop_t *_loop;
 
-            static void timer_cb(uv_timer_t* handle)
+
+            std::list<UvConnectionHandler> _wrappers;
+
+            UvConnectionHandler &lookup(TcpConnection *connection)
             {
-                TcpConnection* conn = static_cast<TcpConnection*>(handle->data);
-                std::cout << "onHeartbeat" << std::endl;
-                conn->heartbeat();
+                // look for the appropriate connection
+                for (auto &wrapper : _wrappers)
+                {
+                    // do we have a match?
+                    if (wrapper.contains(connection)) return wrapper;
+                }
+                
+                // add to the wrappers
+                _wrappers.emplace_back(_loop, connection, 60);
+                
+                // done
+                return _wrappers.back();
             }
 
-            uint16_t onNegotiate(TcpConnection *connection, uint16_t interval) override
+        protected:
+            /**
+             *  Method that is called by AMQP-CPP to register a filedescriptor for readability or writability
+             *  @param  connection  The TCP connection object that is reporting
+             *  @param  fd          The filedescriptor to be monitored
+             *  @param  flags       Should the object be monitored for readability or writability?
+             */
+            virtual void monitor(TcpConnection *connection, int fd, int flags) override
             {
-                if(interval < 60) interval = 60;
-                timer = new uv_timer_t();
-                uv_timer_init(loop, timer);
-                timer->data = connection;
-                uv_timer_start(timer, timer_cb, 0, interval*1000);
-                return interval;
+                std::cout << "monitor" << std::endl;
+                lookup(connection).monitor(fd, flags);
             }
 
-            void onConnected(TcpConnection *connection)
+            /**
+             *  Method that is called when the server sends a heartbeat to the client
+             *  @param  connection  The connection over which the heartbeat was received
+             *  @param  interval    agreed interval by the broker  
+             *  @see    ConnectionHandler::onHeartbeat
+             */
+            virtual uint16_t onNegotiate(TcpConnection *connection, uint16_t interval) override
             {
-                std::cout << "connected" << std::endl;
+                std::cout << "onnegotiate - " << interval << std::endl;
+                return lookup(connection).start(interval);
+
+            }   
+
+            virtual void onDetached(TcpConnection *connection) override
+            {
+                std::cout << "onDetached" << std::endl;
+                _wrappers.remove_if([connection](const UvConnectionHandler &wrapper) -> bool {
+                    return wrapper.contains(connection);
+                    });
             }
 
         public:
-            LibUVHandler(uv_loop_t* _loop) : loop(_loop), LibUvHandler(_loop)
-            {
+            /**
+             *  Constructor
+             *  @param  loop    The event loop to wrap
+             */
+            LibUVHandler(uv_loop_t *loop) : _loop(loop) {}
 
-            }
-            ~LibUVHandler()
-            {
-                uv_timer_stop(timer);
-                uv_close(reinterpret_cast<uv_handle_t*>(timer), [](uv_handle_t* handle){
-                    delete reinterpret_cast<uv_timer_t*>(handle);
-                });
-            }
+            /**
+             *  Destructor
+             */
+            ~LibUVHandler() = default;
 
     };
 
